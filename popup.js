@@ -57,7 +57,6 @@ function downloadTranscript(transcript) {
   URL.revokeObjectURL(url);
 }
 
-// This function gets injected into the YouTube page
 async function extractTranscript() {
   try {
     const video = document.querySelector("video");
@@ -68,65 +67,59 @@ async function extractTranscript() {
 
     const buttons = Array.from(document.querySelectorAll("button"));
     let shouldClose = false;
-
-    // Quick check - are segments already visible?
     let segments = document.querySelectorAll("ytd-transcript-segment-renderer");
-    if (segments.length > 0) {
-      // Already open, use them immediately
-    } else {
-      // Need to open transcript - try methods quickly
+
+    // If segments not visible, try to open transcript
+    if (segments.length === 0) {
       let opened = false;
 
-      // Try Method 1: "Show transcript" button
-      const showTranscript = buttons.find((btn) =>
-        btn
-          .getAttribute("aria-label")
-          ?.toLowerCase()
-          .includes("show transcript")
-      );
+      // Method 1: Try "Transcript" button/tab FIRST (more reliable)
+      const transcriptButton = buttons.find((btn) => {
+        const label = btn.getAttribute("aria-label");
+        const text = btn.textContent?.trim().toLowerCase();
+        return label === "Transcript" || text === "transcript";
+      });
 
-      if (showTranscript) {
-        showTranscript.click();
+      if (transcriptButton) {
+        transcriptButton.click();
         shouldClose = true;
-
-        // Quick check - did it work?
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         segments = document.querySelectorAll("ytd-transcript-segment-renderer");
-        if (segments.length > 0) {
-          opened = true;
-        }
+        if (segments.length > 0) opened = true;
       }
 
-      // Try Method 2: "Transcript" tab (only if Method 1 failed)
+      // Method 2: Try three-dot menu approach (if first failed)
       if (!opened) {
-        const transcriptTab = buttons.find((btn) => {
-          const label = btn.getAttribute("aria-label");
-          const text = btn.textContent?.trim();
-          return label === "Transcript" || text === "Transcript";
-        });
+        const moreButton = buttons.find((btn) =>
+          btn.getAttribute("aria-label")?.includes("More actions")
+        );
 
-        if (transcriptTab) {
-          // Close previous attempt if needed
-          if (shouldClose) {
-            showTranscript?.click();
-          }
+        if (moreButton) {
+          moreButton.click();
+          await new Promise((resolve) => setTimeout(resolve, 500));
 
-          transcriptTab.click();
-          shouldClose = true;
-
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          segments = document.querySelectorAll(
-            "ytd-transcript-segment-renderer"
+          const menuButtons = Array.from(
+            document.querySelectorAll("button, ytd-menu-service-item-renderer")
           );
-          if (segments.length > 0) {
-            opened = true;
+          const transcriptOption = menuButtons.find((btn) =>
+            btn.textContent?.toLowerCase().includes("show transcript")
+          );
+
+          if (transcriptOption) {
+            transcriptOption.click();
+            shouldClose = true;
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            segments = document.querySelectorAll(
+              "ytd-transcript-segment-renderer"
+            );
+            if (segments.length > 0) opened = true;
           }
         }
       }
 
-      // If still no segments after both quick tries, wait a bit longer
+      // Wait a bit more if still nothing
       if (!opened && segments.length === 0) {
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 10; i++) {
           await new Promise((resolve) => setTimeout(resolve, 500));
           segments = document.querySelectorAll(
             "ytd-transcript-segment-renderer"
@@ -140,7 +133,39 @@ async function extractTranscript() {
       }
     }
 
-    // Parse and group segments immediately
+    // Find the scrollable transcript container - try multiple selectors
+    let transcriptContainer =
+      document.querySelector("#segments-container") ||
+      document.querySelector(
+        "ytd-transcript-segment-list-renderer #segments-container"
+      ) ||
+      document.querySelector('[id="segments-container"]') ||
+      document.querySelector(
+        'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"] #content'
+      );
+
+    if (transcriptContainer) {
+      let previousCount = segments.length;
+      let stableCount = 0;
+
+      // Scroll to load all segments
+      for (let i = 0; i < 50; i++) {
+        transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        segments = document.querySelectorAll("ytd-transcript-segment-renderer");
+
+        if (segments.length === previousCount) {
+          stableCount++;
+          if (stableCount >= 3) break; // Stable for 3 checks = done
+        } else {
+          stableCount = 0;
+          previousCount = segments.length;
+        }
+      }
+    }
+
+    // Parse and group segments
     const groups = {};
     Array.from(segments).forEach((seg) => {
       const time =
@@ -175,13 +200,13 @@ async function extractTranscript() {
       })
       .join("\n");
 
-    // Close if we opened it
+    // Close transcript panel if we opened it
     if (shouldClose) {
-      const closeButton = buttons.find((btn) => {
+      const closeButtons = buttons.filter((btn) => {
         const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
         return label.includes("close") && label.includes("transcript");
       });
-      if (closeButton) closeButton.click();
+      if (closeButtons.length > 0) closeButtons[0].click();
     }
 
     return result;
