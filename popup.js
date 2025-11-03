@@ -36,49 +36,59 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     ) {
       resultDiv.innerHTML = `<span class="error">${data}</span>`;
     } else {
-      // Combine chapters and transcript
-      let fullContent = "";
+      // Create structured JSON output for AI consumption
+      const structuredData = {
+        video_title: tab.title,
+        video_url: tab.url,
+        extraction_date: new Date().toISOString(),
+        chapters: data.chapters
+          ? data.chapters
+              .split("\n")
+              .filter((line) => line.trim())
+              .map((line) => {
+                const match = line.match(/^(.+?)\s+-\s+(.+)$/);
+                return match
+                  ? { timestamp: match[1], title: match[2] }
+                  : { raw: line };
+              })
+          : [],
+        transcript: data.transcript
+          .split("\n")
+          .filter((line) => line.trim())
+          .map((line) => {
+            const match = line.match(/^\[(.+?)\]\s+(.+)$/);
+            return match
+              ? { timestamp: match[1], text: match[2] }
+              : { raw: line };
+          }),
+      };
 
-      if (data.chapters && data.chapters.length > 0) {
-        fullContent += "=== VIDEO CHAPTERS ===\n\n";
-        fullContent += data.chapters + "\n\n";
-        fullContent += "=".repeat(50) + "\n\n";
-      }
+      const jsonOutput = JSON.stringify(structuredData, null, 2);
 
-      fullContent += "=== TRANSCRIPT ===\n\n";
-      fullContent += data.transcript;
-
-      // Download the combined content
+      // Download as JSON
       try {
-        downloadTranscript(fullContent, tab.title);
+        downloadTranscript(jsonOutput, tab.title, "json");
         const chapterInfo = data.chapters
           ? ` (${data.chapterCount} chapters + transcript)`
           : "";
-        resultDiv.innerHTML = `<span class="success">✓ Downloaded!${chapterInfo} ${
-          fullContent.length
-        } characters extracted</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${fullContent.substring(
-          0,
-          500
-        )}...</pre>`;
+        const preview = jsonOutput
+          .substring(0, 500)
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        resultDiv.innerHTML = `<span class="success">✓ Downloaded JSON!${chapterInfo} ${jsonOutput.length} characters extracted</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${preview}...</pre>`;
       } catch (downloadError) {
         // Fallback: copy to clipboard
         navigator.clipboard
-          .writeText(fullContent)
+          .writeText(jsonOutput)
           .then(() => {
-            resultDiv.innerHTML = `<span class="error">Download failed, but content copied to clipboard! (${
-              fullContent.length
-            } chars)</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${fullContent.substring(
-              0,
-              500
-            )}...</pre>`;
+            const preview = jsonOutput
+              .substring(0, 500)
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
+            resultDiv.innerHTML = `<span class="error">Download failed, but JSON copied to clipboard! (${jsonOutput.length} chars)</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${preview}...</pre>`;
           })
           .catch(() => {
-            resultDiv.innerHTML = `<span class="error">Download failed: ${
-              downloadError.message
-            }</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${fullContent.substring(
-              0,
-              500
-            )}...</pre>`;
+            resultDiv.innerHTML = `<span class="error">Download failed: ${downloadError.message}</span>`;
           });
       }
     }
@@ -89,8 +99,8 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
   }
 });
 
-// Function to download transcript as text file
-function downloadTranscript(transcript, videoTitle) {
+// Function to download transcript as text or JSON file
+function downloadTranscript(content, videoTitle, format = "txt") {
   try {
     // Clean up video title for filename
     const cleanTitle = (videoTitle || "youtube_video")
@@ -98,9 +108,11 @@ function downloadTranscript(transcript, videoTitle) {
       .replace(/_+/g, "_")
       .substring(0, 50);
 
-    const filename = `transcript_${cleanTitle}_${Date.now()}.txt`;
+    const extension = format === "json" ? "json" : "txt";
+    const mimeType = format === "json" ? "application/json" : "text/plain";
+    const filename = `transcript_${cleanTitle}_${Date.now()}.${extension}`;
 
-    const blob = new Blob([transcript], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
