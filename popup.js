@@ -1,16 +1,24 @@
 document.getElementById("extractBtn").addEventListener("click", async () => {
   const resultDiv = document.getElementById("result");
-  resultDiv.textContent = "Extracting...";
+  const btn = document.getElementById("extractBtn");
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-  if (!tab.url.includes("youtube.com/watch")) {
-    resultDiv.innerHTML =
-      '<span class="error">Please open a YouTube video first!</span>';
-    return;
-  }
+  resultDiv.textContent = "Extracting transcript...";
+  btn.disabled = true;
 
   try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+
+    if (!tab.url.includes("youtube.com/watch")) {
+      resultDiv.innerHTML =
+        '<span class="error">Please open a YouTube video first!</span>';
+      btn.disabled = false;
+      return;
+    }
+
+    // Inject and execute the extraction function
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: extractTranscript,
@@ -20,80 +28,154 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
 
     if (
       transcript.startsWith("Error:") ||
-      transcript.startsWith("Could not") ||
-      transcript.startsWith("No captions")
+      transcript.includes("not found") ||
+      transcript.includes("No transcript")
     ) {
       resultDiv.innerHTML = `<span class="error">${transcript}</span>`;
     } else {
-      // DOWNLOAD THE CONTENT
-      const blob = new Blob([transcript], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "transcript.txt";
-      a.click();
-      URL.revokeObjectURL(url);
-
-      resultDiv.innerHTML = `<span class="success">Success! ${transcript.length} characters - File downloaded!</span>`;
+      // DOWNLOAD THE TRANSCRIPT - THIS LINE IS CRITICAL
+      downloadTranscript(transcript);
+      resultDiv.innerHTML = `<span class="success">✓ Success! Downloaded ${
+        transcript.length
+      } characters</span><hr>${transcript.substring(0, 500)}...`;
     }
   } catch (error) {
     resultDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+  } finally {
+    btn.disabled = false;
   }
 });
 
+// Function to download transcript as text file
+function downloadTranscript(transcript) {
+  const blob = new Blob([transcript], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `youtube-transcript-${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// This function gets injected into the YouTube page
 async function extractTranscript() {
   try {
-    // Get video duration
     const video = document.querySelector("video");
-    if (!video) return "Video element not found";
+    if (!video) return "Error: Video element not found";
 
     const duration = video.duration || 600;
     const groupBy = duration >= 1200 ? 60 : duration < 480 ? 10 : 30;
 
-    // Find transcript button (multiple approaches)
     const buttons = Array.from(document.querySelectorAll("button"));
-    const transcriptButton = buttons.find((btn) => {
-      const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
-      return label.includes("transcript") || label.includes("show transcript");
-    });
+    let transcriptOpened = false;
+    let shouldClose = false;
 
-    if (!transcriptButton) {
-      return "No transcript available for this video";
+    // Check if transcript is already open FIRST
+    let segments = document.querySelectorAll("ytd-transcript-segment-renderer");
+    if (segments.length > 0) {
+      transcriptOpened = true;
     }
 
-    // Check if already open
-    const panel = document.querySelector(
-      'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-transcript"]'J
-    );
-    const wasOpen =
-      panel?.getAttribute("visibility") ===
-      "ENGAGEMENT_PANEL_VISIBILITY_EXPANDED";
+    // METHOD 1: Try "Show transcript" button (most common)
+    if (!transcriptOpened) {
+      const showTranscript = buttons.find((btn) => {
+        const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
+        return label.includes("show transcript");
+      });
 
-    if (!wasOpen) {
-      transcriptButton.click();
+      if (showTranscript) {
+        showTranscript.click();
+        shouldClose = true;
+
+        // Wait longer and check multiple times
+        for (let i = 0; i < 15; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          segments = document.querySelectorAll(
+            "ytd-transcript-segment-renderer"
+          );
+          if (segments.length > 0) {
+            transcriptOpened = true;
+            break;
+          }
+        }
+      }
     }
 
-    // Wait for segments with timeout
-    let segments;
-    for (let i = 0; i < 10; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    // METHOD 2: Try "Transcript" tab button (for videos with chapters)
+    if (!transcriptOpened) {
+      const transcriptTab = buttons.find((btn) => {
+        const label = btn.getAttribute("aria-label");
+        const text = btn.textContent?.trim();
+        return label === "Transcript" || text === "Transcript";
+      });
+
+      if (transcriptTab) {
+        transcriptTab.click();
+        shouldClose = true;
+
+        for (let i = 0; i < 15; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          segments = document.querySelectorAll(
+            "ytd-transcript-segment-renderer"
+          );
+          if (segments.length > 0) {
+            transcriptOpened = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // METHOD 3: Try finding button with "transcript" in aria-label (any variation)
+    if (!transcriptOpened) {
+      const anyTranscriptButton = buttons.find((btn) => {
+        const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
+        const text = btn.textContent?.toLowerCase() || "";
+        return (
+          (label.includes("transcript") || text.includes("transcript")) &&
+          !label.includes("close")
+        );
+      });
+
+      if (anyTranscriptButton) {
+        anyTranscriptButton.click();
+        shouldClose = true;
+
+        for (let i = 0; i < 15; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          segments = document.querySelectorAll(
+            "ytd-transcript-segment-renderer"
+          );
+          if (segments.length > 0) {
+            transcriptOpened = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!transcriptOpened) {
+      return "Error: Could not open transcript panel - no captions may be available";
+    }
+
+    // Extra wait for long videos (segments might still be loading)
+    if (duration > 1200) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       segments = document.querySelectorAll("ytd-transcript-segment-renderer");
-      if (segments.length > 0) break;
     }
 
     if (!segments || segments.length === 0) {
-      if (!wasOpen) transcriptButton.click();
-      return "Transcript loaded but no content found";
+      return "Error: Transcript panel opened but no segments loaded";
     }
 
-    // Parse and group
+    // Parse and group segments
     const groups = {};
     Array.from(segments).forEach((seg) => {
       const time =
         seg.querySelector(".segment-timestamp")?.textContent.trim() || "0:00";
       const text = seg.querySelector(".segment-text")?.textContent.trim() || "";
 
-      if (!text) return; // Skip empty
+      if (!text) return;
 
       const parts = time.split(":").map(Number);
       const seconds =
@@ -107,7 +189,10 @@ async function extractTranscript() {
       groups[group].push(text);
     });
 
-    // Format output
+    if (Object.keys(groups).length === 0) {
+      return "Error: Segments found but no text extracted";
+    }
+
     const result = Object.keys(groups)
       .sort((a, b) => Number(a) - Number(b))
       .map((key) => {
@@ -118,9 +203,16 @@ async function extractTranscript() {
       })
       .join("\n");
 
-    // Close if we opened it
-    if (!wasOpen) {
-      transcriptButton.click();
+    // Close transcript panel if we opened it
+    if (shouldClose) {
+      const closeButton = buttons.find((btn) => {
+        const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
+        return label.includes("close") && label.includes("transcript");
+      });
+
+      if (closeButton) {
+        closeButton.click();
+      }
     }
 
     return result;
