@@ -27,11 +27,13 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
 
     const transcript = results[0].result;
 
-    if (
+    // Check if it's actually an error or just contains error-like words
+    const isActualError =
       transcript.startsWith("Error:") ||
-      transcript.includes("not found") ||
-      transcript.includes("No transcript")
-    ) {
+      transcript === "No transcript available" ||
+      transcript.includes("Video element not found");
+
+    if (isActualError) {
       resultDiv.innerHTML = `<span class="error">${transcript}</span>`;
     } else {
       // Download the transcript
@@ -279,11 +281,12 @@ async function extractTranscript() {
 
     // Close transcript panel if we opened it
     if (shouldClose) {
-      const closeButtons = buttons.filter((btn) => {
+      const allButtons = Array.from(document.querySelectorAll("button"));
+      const closeButton = allButtons.find((btn) => {
         const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
         return label.includes("close") && label.includes("transcript");
       });
-      if (closeButtons.length > 0) closeButtons[0].click();
+      if (closeButton) closeButton.click();
     }
 
     return result;
