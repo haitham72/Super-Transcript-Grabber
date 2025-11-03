@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body {
+        width: 400px;
+        padding: 15px;
+        font-family: Arial, sans-serif;
+      }
+      button {
+        background: #ff0000;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      button:hover {
+        background: #cc0000;
+      }
+      #result {
+        margin-top: 15px;
+        max-height: 300px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        padding: 10px;
+        background: #f9f9f9;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .error {
+        color: red;
+      }
+      .success {
+        color: green;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>YouTube Transcript Extractor</h3>
+    <button id="extractBtn">Extract Transcript</button>
+    <div id="result"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>
