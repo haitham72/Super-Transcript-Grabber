@@ -33,11 +33,11 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     ) {
       resultDiv.innerHTML = `<span class="error">${transcript}</span>`;
     } else {
-      // DOWNLOAD THE TRANSCRIPT - THIS LINE IS CRITICAL
+      // Download the transcript
       downloadTranscript(transcript);
-      resultDiv.innerHTML = `<span class="success">✓ Success! Downloaded ${
+      resultDiv.innerHTML = `<span class="success">Success! ${
         transcript.length
-      } characters</span><hr>${transcript.substring(0, 500)}...`;
+      } characters extracted</span><hr>${transcript.substring(0, 500)}...`;
     }
   } catch (error) {
     resultDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
@@ -52,7 +52,7 @@ function downloadTranscript(transcript) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `youtube-transcript-${Date.now()}.txt`;
+  a.download = `transcript-${Date.now()}.txt`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -67,108 +67,80 @@ async function extractTranscript() {
     const groupBy = duration >= 1200 ? 60 : duration < 480 ? 10 : 30;
 
     const buttons = Array.from(document.querySelectorAll("button"));
-    let transcriptOpened = false;
     let shouldClose = false;
 
-    // Check if transcript is already open FIRST
+    // Quick check - are segments already visible?
     let segments = document.querySelectorAll("ytd-transcript-segment-renderer");
     if (segments.length > 0) {
-      transcriptOpened = true;
-    }
+      // Already open, use them immediately
+    } else {
+      // Need to open transcript - try methods quickly
+      let opened = false;
 
-    // METHOD 1: Try "Show transcript" button (most common)
-    if (!transcriptOpened) {
-      const showTranscript = buttons.find((btn) => {
-        const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
-        return label.includes("show transcript");
-      });
+      // Try Method 1: "Show transcript" button
+      const showTranscript = buttons.find((btn) =>
+        btn
+          .getAttribute("aria-label")
+          ?.toLowerCase()
+          .includes("show transcript")
+      );
 
       if (showTranscript) {
         showTranscript.click();
         shouldClose = true;
 
-        // Wait longer and check multiple times
-        for (let i = 0; i < 15; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
+        // Quick check - did it work?
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        segments = document.querySelectorAll("ytd-transcript-segment-renderer");
+        if (segments.length > 0) {
+          opened = true;
+        }
+      }
+
+      // Try Method 2: "Transcript" tab (only if Method 1 failed)
+      if (!opened) {
+        const transcriptTab = buttons.find((btn) => {
+          const label = btn.getAttribute("aria-label");
+          const text = btn.textContent?.trim();
+          return label === "Transcript" || text === "Transcript";
+        });
+
+        if (transcriptTab) {
+          // Close previous attempt if needed
+          if (shouldClose) {
+            showTranscript?.click();
+          }
+
+          transcriptTab.click();
+          shouldClose = true;
+
+          await new Promise((resolve) => setTimeout(resolve, 1500));
           segments = document.querySelectorAll(
             "ytd-transcript-segment-renderer"
           );
           if (segments.length > 0) {
-            transcriptOpened = true;
-            break;
+            opened = true;
           }
         }
       }
-    }
 
-    // METHOD 2: Try "Transcript" tab button (for videos with chapters)
-    if (!transcriptOpened) {
-      const transcriptTab = buttons.find((btn) => {
-        const label = btn.getAttribute("aria-label");
-        const text = btn.textContent?.trim();
-        return label === "Transcript" || text === "Transcript";
-      });
-
-      if (transcriptTab) {
-        transcriptTab.click();
-        shouldClose = true;
-
-        for (let i = 0; i < 15; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
+      // If still no segments after both quick tries, wait a bit longer
+      if (!opened && segments.length === 0) {
+        for (let i = 0; i < 8; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
           segments = document.querySelectorAll(
             "ytd-transcript-segment-renderer"
           );
-          if (segments.length > 0) {
-            transcriptOpened = true;
-            break;
-          }
+          if (segments.length > 0) break;
         }
+      }
+
+      if (segments.length === 0) {
+        return "Error: No transcript available for this video";
       }
     }
 
-    // METHOD 3: Try finding button with "transcript" in aria-label (any variation)
-    if (!transcriptOpened) {
-      const anyTranscriptButton = buttons.find((btn) => {
-        const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
-        const text = btn.textContent?.toLowerCase() || "";
-        return (
-          (label.includes("transcript") || text.includes("transcript")) &&
-          !label.includes("close")
-        );
-      });
-
-      if (anyTranscriptButton) {
-        anyTranscriptButton.click();
-        shouldClose = true;
-
-        for (let i = 0; i < 15; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
-          segments = document.querySelectorAll(
-            "ytd-transcript-segment-renderer"
-          );
-          if (segments.length > 0) {
-            transcriptOpened = true;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!transcriptOpened) {
-      return "Error: Could not open transcript panel - no captions may be available";
-    }
-
-    // Extra wait for long videos (segments might still be loading)
-    if (duration > 1200) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      segments = document.querySelectorAll("ytd-transcript-segment-renderer");
-    }
-
-    if (!segments || segments.length === 0) {
-      return "Error: Transcript panel opened but no segments loaded";
-    }
-
-    // Parse and group segments
+    // Parse and group segments immediately
     const groups = {};
     Array.from(segments).forEach((seg) => {
       const time =
@@ -203,16 +175,13 @@ async function extractTranscript() {
       })
       .join("\n");
 
-    // Close transcript panel if we opened it
+    // Close if we opened it
     if (shouldClose) {
       const closeButton = buttons.find((btn) => {
         const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
         return label.includes("close") && label.includes("transcript");
       });
-
-      if (closeButton) {
-        closeButton.click();
-      }
+      if (closeButton) closeButton.click();
     }
 
     return result;
