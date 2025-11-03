@@ -3,7 +3,7 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
   const btn = document.getElementById("extractBtn");
 
   resultDiv.textContent =
-    "Extracting transcript and chapters... (this may take 10-30 seconds for long videos)";
+    "Extracting full video data... (this may take 10-30 seconds for long videos)";
   btn.disabled = true;
 
   try {
@@ -38,9 +38,20 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     } else {
       // Create structured JSON output for AI consumption
       const structuredData = {
-        video_title: tab.title,
-        video_url: tab.url,
-        extraction_date: new Date().toISOString(),
+        metadata: {
+          video_title: data.metadata.title,
+          video_url: tab.url,
+          video_id: data.metadata.videoId,
+          channel_name: data.metadata.channelName,
+          channel_url: data.metadata.channelUrl,
+          duration: data.metadata.duration,
+          duration_formatted: data.metadata.durationFormatted,
+          view_count: data.metadata.viewCount,
+          upload_date: data.metadata.uploadDate,
+          like_count: data.metadata.likeCount,
+          extraction_date: new Date().toISOString(),
+        },
+        description: data.description,
         chapters: data.chapters
           ? data.chapters
               .split("\n")
@@ -61,21 +72,22 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
               ? { timestamp: match[1], text: match[2] }
               : { raw: line };
           }),
+        tags: data.tags || [],
       };
 
       const jsonOutput = JSON.stringify(structuredData, null, 2);
 
       // Download as JSON
       try {
-        downloadTranscript(jsonOutput, tab.title, "json");
+        downloadTranscript(jsonOutput, data.metadata.title, "json");
         const chapterInfo = data.chapters
-          ? ` (${data.chapterCount} chapters + transcript)`
+          ? ` (${data.chapterCount} chapters)`
           : "";
         const preview = jsonOutput
           .substring(0, 500)
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
-        resultDiv.innerHTML = `<span class="success">✓ Downloaded JSON!${chapterInfo} ${jsonOutput.length} characters extracted</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${preview}...</pre>`;
+        resultDiv.innerHTML = `<span class="success">✓ Downloaded JSON!${chapterInfo} Full video data extracted (${jsonOutput.length} characters)</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${preview}...</pre>`;
       } catch (downloadError) {
         // Fallback: copy to clipboard
         navigator.clipboard
@@ -146,7 +158,117 @@ async function extractTranscriptAndChapters() {
     if (!video) return "Error: Video element not found";
 
     const duration = video.duration || 600;
-    const groupBy = duration >= 1200 ? 60 : duration < 480 ? 10 : 30;
+    // Fixed grouping logic: 60s for 20+ min videos, 30s for 8-20 min, 15s for shorter
+    const groupBy = duration >= 1200 ? 60 : duration >= 480 ? 30 : 15;
+
+    // === EXTRACT METADATA ===
+    const metadata = {
+      title:
+        document
+          .querySelector("h1.ytd-watch-metadata yt-formatted-string")
+          ?.textContent?.trim() ||
+        document.querySelector("h1.title")?.textContent?.trim() ||
+        "Unknown Title",
+      videoId: new URLSearchParams(window.location.search).get("v") || "",
+      channelName:
+        document
+          .querySelector("ytd-channel-name#channel-name yt-formatted-string a")
+          ?.textContent?.trim() ||
+        document.querySelector("#channel-name a")?.textContent?.trim() ||
+        "Unknown Channel",
+      channelUrl:
+        document.querySelector(
+          "ytd-channel-name#channel-name yt-formatted-string a"
+        )?.href ||
+        document.querySelector("#channel-name a")?.href ||
+        "",
+      duration: Math.floor(duration),
+      durationFormatted: new Date(duration * 1000)
+        .toISOString()
+        .substr(11, 8)
+        .replace(/^00:/, ""),
+      viewCount:
+        document
+          .querySelector("ytd-video-view-count-renderer .view-count")
+          ?.textContent?.trim() ||
+        document.querySelector("#info span.view-count")?.textContent?.trim() ||
+        "Unknown",
+      uploadDate:
+        document
+          .querySelector("#info-strings yt-formatted-string")
+          ?.textContent?.trim() ||
+        document
+          .querySelector("#date yt-formatted-string")
+          ?.textContent?.trim() ||
+        "Unknown",
+      likeCount:
+        document
+          .querySelector('like-button-view-model button[aria-label*="like"]')
+          ?.getAttribute("aria-label") ||
+        document
+          .querySelector("ytd-toggle-button-renderer.ytd-menu-renderer button")
+          ?.getAttribute("aria-label") ||
+        "Unknown",
+    };
+
+    // === EXTRACT DESCRIPTION ===
+    let description = "";
+    const descriptionElement =
+      document.querySelector(
+        "#description-inline-expander yt-attributed-string span"
+      ) ||
+      document.querySelector("#description yt-formatted-string") ||
+      document.querySelector("ytd-text-inline-expander #content");
+
+    if (descriptionElement) {
+      // Try to expand description if collapsed
+      const expandButton =
+        document.querySelector(
+          "#description-inline-expander tp-yt-paper-button#expand"
+        ) || document.querySelector("#description tp-yt-paper-button#more");
+      if (
+        expandButton &&
+        expandButton.textContent.toLowerCase().includes("more")
+      ) {
+        expandButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+
+      // Get the full description text
+      const fullDescElement =
+        document.querySelector(
+          "#description-inline-expander yt-attributed-string span"
+        ) || document.querySelector("#description yt-formatted-string");
+      description = fullDescElement?.textContent?.trim() || "";
+    }
+
+    // === EXTRACT TAGS ===
+    let tags = [];
+    try {
+      // Tags are usually in meta keywords or in the page data
+      const metaKeywords = document.querySelector('meta[name="keywords"]');
+      if (metaKeywords) {
+        tags = metaKeywords
+          .getAttribute("content")
+          .split(",")
+          .map((t) => t.trim())
+          .filter((t) => t);
+      }
+
+      // Alternative: extract from ytInitialData
+      if (tags.length === 0 && window.ytInitialData) {
+        const videoDetails =
+          window.ytInitialData?.contents?.twoColumnWatchNextResults?.results
+            ?.results?.contents?.[0]?.videoPrimaryInfoRenderer;
+        if (videoDetails?.superTitleLink?.runs) {
+          tags = videoDetails.superTitleLink.runs
+            .map((run) => run.text)
+            .filter((t) => t);
+        }
+      }
+    } catch (e) {
+      console.log("Could not extract tags:", e);
+    }
 
     // === EXTRACT CHAPTERS FIRST (non-invasive) ===
     let chaptersText = "";
@@ -374,9 +496,12 @@ async function extractTranscriptAndChapters() {
     }
 
     return {
+      metadata: metadata,
+      description: description,
       chapters: chaptersText,
       chapterCount: chapterCount,
       transcript: transcriptText,
+      tags: tags,
     };
   } catch (error) {
     return `Error: ${error.message}`;
