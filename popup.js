@@ -44,11 +44,13 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
           video_id: data.metadata.videoId,
           channel_name: data.metadata.channelName,
           channel_url: data.metadata.channelUrl,
+          subscriber_count: data.metadata.subscriberCount,
           duration: data.metadata.duration,
           duration_formatted: data.metadata.durationFormatted,
           view_count: data.metadata.viewCount,
           upload_date: data.metadata.uploadDate,
           like_count: data.metadata.likeCount,
+          social_links: data.metadata.socialLinks,
           extraction_date: new Date().toISOString(),
         },
         description: data.description,
@@ -162,6 +164,61 @@ async function extractTranscriptAndChapters() {
     const groupBy = duration >= 1200 ? 60 : duration >= 480 ? 30 : 15;
 
     // === EXTRACT METADATA ===
+
+    // Helper function to extract numbers from text
+    const extractNumber = (text) => {
+      if (!text) return null;
+      const match = text.match(/[\d,]+/);
+      return match ? match[0].replace(/,/g, "") : null;
+    };
+
+    // Get like count
+    let likeCount = null;
+    const likeButton =
+      document.querySelector(
+        'like-button-view-model button[aria-label*="like"]'
+      ) ||
+      document.querySelector(
+        'ytd-toggle-button-renderer.ytd-menu-renderer button[aria-label*="like"]'
+      );
+    if (likeButton) {
+      const ariaLabel = likeButton.getAttribute("aria-label");
+      likeCount = extractNumber(ariaLabel);
+    }
+
+    // Get subscriber count
+    let subscriberCount = null;
+    const subButton =
+      document.querySelector("#subscriber-count")?.textContent?.trim() ||
+      document
+        .querySelector("ytd-subscribe-button-renderer #owner-sub-count")
+        ?.textContent?.trim();
+    if (subButton) {
+      subscriberCount = subButton;
+    }
+
+    // Get social links (Instagram, TikTok, etc.)
+    const socialLinks = {};
+    const linkElements = document.querySelectorAll(
+      "ytd-channel-tagline-renderer a, #link-list-container a"
+    );
+    linkElements.forEach((link) => {
+      const href = link.href;
+      const text = link.textContent?.toLowerCase() || "";
+
+      if (href.includes("instagram.com")) {
+        socialLinks.instagram = href;
+      } else if (href.includes("tiktok.com")) {
+        socialLinks.tiktok = href;
+      } else if (href.includes("twitter.com") || href.includes("x.com")) {
+        socialLinks.twitter = href;
+      } else if (href.includes("facebook.com")) {
+        socialLinks.facebook = href;
+      } else if (text.includes("website") || text.includes("site")) {
+        socialLinks.website = href;
+      }
+    });
+
     const metadata = {
       title:
         document
@@ -182,11 +239,19 @@ async function extractTranscriptAndChapters() {
         )?.href ||
         document.querySelector("#channel-name a")?.href ||
         "",
+      subscriberCount: subscriberCount,
       duration: Math.floor(duration),
-      durationFormatted: new Date(duration * 1000)
-        .toISOString()
-        .substr(11, 8)
-        .replace(/^00:/, ""),
+      durationFormatted: (() => {
+        const hours = Math.floor(duration / 3600);
+        const mins = Math.floor((duration % 3600) / 60);
+        const secs = Math.floor(duration % 60);
+        if (hours > 0) {
+          return `${hours}:${mins.toString().padStart(2, "0")}:${secs
+            .toString()
+            .padStart(2, "0")}`;
+        }
+        return `${mins}:${secs.toString().padStart(2, "0")}`;
+      })(),
       viewCount:
         document
           .querySelector("ytd-video-view-count-renderer .view-count")
@@ -201,14 +266,8 @@ async function extractTranscriptAndChapters() {
           .querySelector("#date yt-formatted-string")
           ?.textContent?.trim() ||
         "Unknown",
-      likeCount:
-        document
-          .querySelector('like-button-view-model button[aria-label*="like"]')
-          ?.getAttribute("aria-label") ||
-        document
-          .querySelector("ytd-toggle-button-renderer.ytd-menu-renderer button")
-          ?.getAttribute("aria-label") ||
-        "Unknown",
+      likeCount: likeCount,
+      socialLinks: Object.keys(socialLinks).length > 0 ? socialLinks : null,
     };
 
     // === EXTRACT DESCRIPTION ===
@@ -274,13 +333,15 @@ async function extractTranscriptAndChapters() {
     let chaptersText = "";
     let chapterCount = 0;
 
+    // Use a Map to deduplicate chapters by timestamp
+    const chaptersMap = new Map();
+
     // Method 1: Try to get chapters from the description or chapters panel
     const chapterElements = document.querySelectorAll(
       'ytd-macro-markers-list-item-renderer, ytd-engagement-panel-title-header-renderer[class*="macro-markers"]'
     );
 
     if (chapterElements.length > 0) {
-      const chapters = [];
       document
         .querySelectorAll("ytd-macro-markers-list-item-renderer")
         .forEach((item) => {
@@ -290,24 +351,19 @@ async function extractTranscriptAndChapters() {
           if (timeElement && titleElement) {
             const time = timeElement.textContent.trim();
             const title = titleElement.textContent.trim();
-            chapters.push(`${time} - ${title}`);
+            // Use timestamp as key to prevent duplicates
+            chaptersMap.set(time, title);
           }
         });
-
-      if (chapters.length > 0) {
-        chaptersText = chapters.join("\n");
-        chapterCount = chapters.length;
-      }
     }
 
-    // Method 2: Try from video description expandable sections
-    if (!chaptersText) {
+    // Method 2: Try from video description expandable sections (only if no chapters found yet)
+    if (chaptersMap.size === 0) {
       const descriptionChapters = document.querySelectorAll(
         "#structured-description ytd-horizontal-card-list-renderer ytd-macro-markers-list-item-renderer"
       );
 
       if (descriptionChapters.length > 0) {
-        const chapters = [];
         descriptionChapters.forEach((item) => {
           const timeElement = item.querySelector("#time");
           const titleElement = item.querySelector("#details h4");
@@ -315,15 +371,28 @@ async function extractTranscriptAndChapters() {
           if (timeElement && titleElement) {
             const time = timeElement.textContent.trim();
             const title = titleElement.textContent.trim();
-            chapters.push(`${time} - ${title}`);
+            chaptersMap.set(time, title);
           }
         });
-
-        if (chapters.length > 0) {
-          chaptersText = chapters.join("\n");
-          chapterCount = chapters.length;
-        }
       }
+    }
+
+    // Convert map to sorted array
+    if (chaptersMap.size > 0) {
+      // Sort chapters by timestamp
+      const sortedChapters = Array.from(chaptersMap.entries()).sort((a, b) => {
+        const timeToSeconds = (time) => {
+          const parts = time.split(":").map(Number);
+          if (parts.length === 2) return parts[0] * 60 + parts[1];
+          return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        };
+        return timeToSeconds(a[0]) - timeToSeconds(b[0]);
+      });
+
+      chaptersText = sortedChapters
+        .map(([time, title]) => `${time} - ${title}`)
+        .join("\n");
+      chapterCount = sortedChapters.length;
     }
 
     // === EXTRACT TRANSCRIPT (existing logic) ===
