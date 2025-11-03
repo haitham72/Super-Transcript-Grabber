@@ -2,7 +2,8 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
   const resultDiv = document.getElementById("result");
   const btn = document.getElementById("extractBtn");
 
-  resultDiv.textContent = "Extracting transcript...";
+  resultDiv.textContent =
+    "Extracting transcript... (this may take 10-30 seconds for long videos)";
   btn.disabled = true;
 
   try {
@@ -34,8 +35,8 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
       resultDiv.innerHTML = `<span class="error">${transcript}</span>`;
     } else {
       // Download the transcript
-      downloadTranscript(transcript);
-      resultDiv.innerHTML = `<span class="success">Success! ${
+      downloadTranscript(transcript, tab.title);
+      resultDiv.innerHTML = `<span class="success">✓ Downloaded! ${
         transcript.length
       } characters extracted</span><hr>${transcript.substring(0, 500)}...`;
     }
@@ -47,16 +48,31 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
 });
 
 // Function to download transcript as text file
-function downloadTranscript(transcript) {
+function downloadTranscript(transcript, videoTitle) {
+  // Clean up video title for filename
+  const cleanTitle = videoTitle
+    .replace(/[^a-z0-9]/gi, "_")
+    .replace(/_+/g, "_")
+    .substring(0, 50);
+
+  const filename = `transcript_${cleanTitle}_${Date.now()}.txt`;
+
   const blob = new Blob([transcript], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `transcript-${Date.now()}.txt`;
+  a.download = filename;
+
+  // Append to body, click, then remove (more reliable)
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+
+  // Clean up the URL after a short delay
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
+// This function gets injected into the YouTube page
 async function extractTranscript() {
   try {
     const video = document.querySelector("video");
@@ -65,7 +81,6 @@ async function extractTranscript() {
     const duration = video.duration || 600;
     const groupBy = duration >= 1200 ? 60 : duration < 480 ? 10 : 30;
 
-    const buttons = Array.from(document.querySelectorAll("button"));
     let shouldClose = false;
     let segments = document.querySelectorAll("ytd-transcript-segment-renderer");
 
@@ -73,7 +88,12 @@ async function extractTranscript() {
     if (segments.length === 0) {
       let opened = false;
 
-      // Method 1: Try "Transcript" button/tab FIRST (more reliable)
+      // Wait for page to be fully ready first
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const buttons = Array.from(document.querySelectorAll("button"));
+
+      // Method 1: Try "Transcript" button/tab FIRST (most reliable)
       const transcriptButton = buttons.find((btn) => {
         const label = btn.getAttribute("aria-label");
         const text = btn.textContent?.trim().toLowerCase();
@@ -83,9 +103,18 @@ async function extractTranscript() {
       if (transcriptButton) {
         transcriptButton.click();
         shouldClose = true;
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        segments = document.querySelectorAll("ytd-transcript-segment-renderer");
-        if (segments.length > 0) opened = true;
+
+        // Wait longer and check multiple times
+        for (let i = 0; i < 15; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          segments = document.querySelectorAll(
+            "ytd-transcript-segment-renderer"
+          );
+          if (segments.length > 0) {
+            opened = true;
+            break;
+          }
+        }
       }
 
       // Method 2: Try three-dot menu approach (if first failed)
@@ -108,18 +137,24 @@ async function extractTranscript() {
           if (transcriptOption) {
             transcriptOption.click();
             shouldClose = true;
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-            segments = document.querySelectorAll(
-              "ytd-transcript-segment-renderer"
-            );
-            if (segments.length > 0) opened = true;
+
+            for (let i = 0; i < 15; i++) {
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              segments = document.querySelectorAll(
+                "ytd-transcript-segment-renderer"
+              );
+              if (segments.length > 0) {
+                opened = true;
+                break;
+              }
+            }
           }
         }
       }
 
-      // Wait a bit more if still nothing
+      // Final fallback: wait even longer
       if (!opened && segments.length === 0) {
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 20; i++) {
           await new Promise((resolve) => setTimeout(resolve, 500));
           segments = document.querySelectorAll(
             "ytd-transcript-segment-renderer"
@@ -129,7 +164,7 @@ async function extractTranscript() {
       }
 
       if (segments.length === 0) {
-        return "Error: No transcript available for this video";
+        return "Error: No transcript available for this video. Try refreshing the page and waiting a few seconds before clicking Extract.";
       }
     }
 
@@ -147,22 +182,26 @@ async function extractTranscript() {
     if (transcriptContainer) {
       let previousCount = segments.length;
       let stableCount = 0;
+      const maxScrollAttempts = 60; // Increased for very long videos
 
       // Scroll to load all segments
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < maxScrollAttempts; i++) {
         transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 150)); // Faster scrolling
 
         segments = document.querySelectorAll("ytd-transcript-segment-renderer");
 
         if (segments.length === previousCount) {
           stableCount++;
-          if (stableCount >= 3) break; // Stable for 3 checks = done
+          if (stableCount >= 4) break; // More stable checks
         } else {
           stableCount = 0;
           previousCount = segments.length;
         }
       }
+    } else {
+      // Container not found - might already have all segments loaded
+      console.log("Transcript container not found, using existing segments");
     }
 
     // Parse and group segments
@@ -187,7 +226,7 @@ async function extractTranscript() {
     });
 
     if (Object.keys(groups).length === 0) {
-      return "Error: Segments found but no text extracted";
+      return `Error: Found ${segments.length} segments but couldn't extract text. This might be a YouTube layout issue.`;
     }
 
     const result = Object.keys(groups)
