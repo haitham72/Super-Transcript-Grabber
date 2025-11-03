@@ -3,7 +3,7 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
   const btn = document.getElementById("extractBtn");
 
   resultDiv.textContent =
-    "Extracting transcript... (this may take 10-30 seconds for long videos)";
+    "Extracting transcript and chapters... (this may take 10-30 seconds for long videos)";
   btn.disabled = true;
 
   try {
@@ -22,37 +22,52 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     // Inject and execute the extraction function
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: extractTranscript,
+      func: extractTranscriptAndChapters,
     });
 
-    const transcript = results[0].result;
+    const data = results[0].result;
 
-    // Check if it's actually an error or just contains error-like words
-    const isActualError =
-      transcript.startsWith("Error:") ||
-      transcript === "No transcript available" ||
-      transcript.includes("Video element not found");
-
-    if (isActualError) {
-      resultDiv.innerHTML = `<span class="error">${transcript}</span>`;
+    // Check if it's actually an error
+    if (
+      typeof data === "string" &&
+      (data.startsWith("Error:") ||
+        data === "No transcript available" ||
+        data.includes("Video element not found"))
+    ) {
+      resultDiv.innerHTML = `<span class="error">${data}</span>`;
     } else {
-      // Download the transcript
+      // Combine chapters and transcript
+      let fullContent = "";
+
+      if (data.chapters && data.chapters.length > 0) {
+        fullContent += "=== VIDEO CHAPTERS ===\n\n";
+        fullContent += data.chapters + "\n\n";
+        fullContent += "=".repeat(50) + "\n\n";
+      }
+
+      fullContent += "=== TRANSCRIPT ===\n\n";
+      fullContent += data.transcript;
+
+      // Download the combined content
       try {
-        downloadTranscript(transcript, tab.title);
-        resultDiv.innerHTML = `<span class="success">✓ Downloaded! ${
-          transcript.length
-        } characters extracted</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${transcript.substring(
+        downloadTranscript(fullContent, tab.title);
+        const chapterInfo = data.chapters
+          ? ` (${data.chapterCount} chapters + transcript)`
+          : "";
+        resultDiv.innerHTML = `<span class="success">✓ Downloaded!${chapterInfo} ${
+          fullContent.length
+        } characters extracted</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${fullContent.substring(
           0,
           500
         )}...</pre>`;
       } catch (downloadError) {
         // Fallback: copy to clipboard
         navigator.clipboard
-          .writeText(transcript)
+          .writeText(fullContent)
           .then(() => {
-            resultDiv.innerHTML = `<span class="error">Download failed, but transcript copied to clipboard! (${
-              transcript.length
-            } chars)</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${transcript.substring(
+            resultDiv.innerHTML = `<span class="error">Download failed, but content copied to clipboard! (${
+              fullContent.length
+            } chars)</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${fullContent.substring(
               0,
               500
             )}...</pre>`;
@@ -60,7 +75,7 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
           .catch(() => {
             resultDiv.innerHTML = `<span class="error">Download failed: ${
               downloadError.message
-            }</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${transcript.substring(
+            }</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${fullContent.substring(
               0,
               500
             )}...</pre>`;
@@ -113,7 +128,7 @@ function downloadTranscript(transcript, videoTitle) {
 }
 
 // This function gets injected into the YouTube page
-async function extractTranscript() {
+async function extractTranscriptAndChapters() {
   try {
     const video = document.querySelector("video");
     if (!video) return "Error: Video element not found";
@@ -121,6 +136,63 @@ async function extractTranscript() {
     const duration = video.duration || 600;
     const groupBy = duration >= 1200 ? 60 : duration < 480 ? 10 : 30;
 
+    // === EXTRACT CHAPTERS FIRST (non-invasive) ===
+    let chaptersText = "";
+    let chapterCount = 0;
+
+    // Method 1: Try to get chapters from the description or chapters panel
+    const chapterElements = document.querySelectorAll(
+      'ytd-macro-markers-list-item-renderer, ytd-engagement-panel-title-header-renderer[class*="macro-markers"]'
+    );
+
+    if (chapterElements.length > 0) {
+      const chapters = [];
+      document
+        .querySelectorAll("ytd-macro-markers-list-item-renderer")
+        .forEach((item) => {
+          const timeElement = item.querySelector("#time");
+          const titleElement = item.querySelector("#details h4");
+
+          if (timeElement && titleElement) {
+            const time = timeElement.textContent.trim();
+            const title = titleElement.textContent.trim();
+            chapters.push(`${time} - ${title}`);
+          }
+        });
+
+      if (chapters.length > 0) {
+        chaptersText = chapters.join("\n");
+        chapterCount = chapters.length;
+      }
+    }
+
+    // Method 2: Try from video description expandable sections
+    if (!chaptersText) {
+      const descriptionChapters = document.querySelectorAll(
+        "#structured-description ytd-horizontal-card-list-renderer ytd-macro-markers-list-item-renderer"
+      );
+
+      if (descriptionChapters.length > 0) {
+        const chapters = [];
+        descriptionChapters.forEach((item) => {
+          const timeElement = item.querySelector("#time");
+          const titleElement = item.querySelector("#details h4");
+
+          if (timeElement && titleElement) {
+            const time = timeElement.textContent.trim();
+            const title = titleElement.textContent.trim();
+            chapters.push(`${time} - ${title}`);
+          }
+        });
+
+        if (chapters.length > 0) {
+          chaptersText = chapters.join("\n");
+          chapterCount = chapters.length;
+        }
+      }
+    }
+
+    // === EXTRACT TRANSCRIPT (existing logic) ===
     let shouldClose = false;
     let segments = document.querySelectorAll("ytd-transcript-segment-renderer");
 
@@ -269,7 +341,7 @@ async function extractTranscript() {
       return `Error: Found ${segments.length} segments but couldn't extract text. This might be a YouTube layout issue.`;
     }
 
-    const result = Object.keys(groups)
+    const transcriptText = Object.keys(groups)
       .sort((a, b) => Number(a) - Number(b))
       .map((key) => {
         const mins = Math.floor(key / 60);
@@ -289,7 +361,11 @@ async function extractTranscript() {
       if (closeButton) closeButton.click();
     }
 
-    return result;
+    return {
+      chapters: chaptersText,
+      chapterCount: chapterCount,
+      transcript: transcriptText,
+    };
   } catch (error) {
     return `Error: ${error.message}`;
   }
