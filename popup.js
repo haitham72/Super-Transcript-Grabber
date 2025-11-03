@@ -35,10 +35,35 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
       resultDiv.innerHTML = `<span class="error">${transcript}</span>`;
     } else {
       // Download the transcript
-      downloadTranscript(transcript, tab.title);
-      resultDiv.innerHTML = `<span class="success">✓ Downloaded! ${
-        transcript.length
-      } characters extracted</span><hr>${transcript.substring(0, 500)}...`;
+      try {
+        downloadTranscript(transcript, tab.title);
+        resultDiv.innerHTML = `<span class="success">✓ Downloaded! ${
+          transcript.length
+        } characters extracted</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${transcript.substring(
+          0,
+          500
+        )}...</pre>`;
+      } catch (downloadError) {
+        // Fallback: copy to clipboard
+        navigator.clipboard
+          .writeText(transcript)
+          .then(() => {
+            resultDiv.innerHTML = `<span class="error">Download failed, but transcript copied to clipboard! (${
+              transcript.length
+            } chars)</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${transcript.substring(
+              0,
+              500
+            )}...</pre>`;
+          })
+          .catch(() => {
+            resultDiv.innerHTML = `<span class="error">Download failed: ${
+              downloadError.message
+            }</span><hr><pre style="white-space: pre-wrap; font-size: 11px;">${transcript.substring(
+              0,
+              500
+            )}...</pre>`;
+          });
+      }
     }
   } catch (error) {
     resultDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
@@ -49,27 +74,40 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
 
 // Function to download transcript as text file
 function downloadTranscript(transcript, videoTitle) {
-  // Clean up video title for filename
-  const cleanTitle = videoTitle
-    .replace(/[^a-z0-9]/gi, "_")
-    .replace(/_+/g, "_")
-    .substring(0, 50);
+  try {
+    // Clean up video title for filename
+    const cleanTitle = (videoTitle || "youtube_video")
+      .replace(/[^a-z0-9]/gi, "_")
+      .replace(/_+/g, "_")
+      .substring(0, 50);
 
-  const filename = `transcript_${cleanTitle}_${Date.now()}.txt`;
+    const filename = `transcript_${cleanTitle}_${Date.now()}.txt`;
 
-  const blob = new Blob([transcript], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
+    const blob = new Blob([transcript], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
 
-  // Append to body, click, then remove (more reliable)
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+    // Append to body, click, then remove (more reliable)
+    document.body.appendChild(a);
 
-  // Clean up the URL after a short delay
-  setTimeout(() => URL.revokeObjectURL(url), 100);
+    // Force click with timeout to ensure it happens
+    setTimeout(() => {
+      a.click();
+      console.log("Download triggered for:", filename);
+
+      // Clean up after download starts
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 250);
+    }, 10);
+  } catch (error) {
+    console.error("Download error:", error);
+    throw error;
+  }
 }
 
 // This function gets injected into the YouTube page
